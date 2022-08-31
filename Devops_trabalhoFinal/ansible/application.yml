@@ -1,0 +1,132 @@
+---
+- hosts: all
+  become: yes
+  become_user: root
+  become_method: sudo
+  tasks:
+    - name: Habilitar nginx para amazon linux 2
+      shell: "amazon-linux-extras enable nginx1.12"
+      become: yes
+
+    - name: Instalar nginx
+      yum:
+        name: nginx
+        state: latest
+
+    ####################### PHP #######################
+    - name: Instalar php
+      yum:
+        name: '{{item}}'
+        state: latest
+      with_items:
+        - php
+        - php-common
+        - php-cli
+        - php-gd
+        - php-curl
+        - php-mysql
+        - php-fpm
+    
+    - name: Copiar arquivos de configuração do php
+      copy:
+        src: "./files/php.conf"
+        dest: "/etc/php-fpm.d/www.conf"
+        mode: 0644
+
+    - name: Definir as permissões corretas para os diretórios php
+      file:
+        path: /var/lib/php
+        owner: root
+        group: nginx
+
+    - name: Habilitar php-fpm         #permite processar scripts ph
+      service: name=php-fpm enabled=yes
+      become: yes
+    
+    - name: Iniciar php-fpm
+      service:
+        name: php-fpm
+        state: started
+
+  ####################### NGINX #######################
+    - name: Copiar configurações de arquivo do nginx
+      copy:
+        src: "./files/nginx.conf"
+        dest: "/etc/nginx/nginx.conf"
+        mode: 0644
+
+    - name: Criar diretório
+      file: 
+        path: "/var/www/app"
+        state: directory
+
+    - name: Construir pacote site
+      local_action: shell tar -c -z -f app.zip -C ./files/php .
+      become: no
+
+    - name: Copiar pacote site
+      copy:
+        src: "app.zip"
+        dest: "/home/ec2-user/app.zip"
+
+    - name: Descompactar pacote site
+      shell: "tar -xf /home/ec2-user/app.zip -C /var/www/app"
+    
+    - name: Definir as permissões corretas para os diretórios
+      file:
+        path: /var/www/app
+        owner: root
+        group: nginx
+
+    - name: Atualizar configurações do app nginx
+      copy: 
+        src: "./files/application.conf"
+        dest: "/etc/nginx/conf.d/app.conf"
+        mode: 0644          #permissão para ler e modificar
+
+    - name: Habilitar Nginx
+      service: name=nginx enabled=yes
+      become: yes
+    
+    - name: Reiniciar nginx
+      service:
+        name: nginx
+        state: restarted
+
+      ####################### MARIADB #######################
+    - name: Habilitar mariadb para amazon linux 2
+      shell: "amazon-linux-extras enable mariadb10.5"
+      become: yes
+
+    - name: Install mariadb
+      yum:
+        name: mariadb
+        state: latest
+
+    - name: Iniciar mariadb
+      shell: "systemctl start mariadb"
+      become: yes
+
+    - name: Habilitar serviços do mariadb 
+      shell: "systemctl enable mariadb"
+      become: yes
+
+    - name: Recriar database
+      shell:
+        cmd: |
+          mariadb <<EOF
+          DROP USER IF EXISTS user_manager;
+          DROP DATABASE IF EXISTS user_inventory;
+          CREATE DATABASE user_inventory;
+          CREATE USER user_manager IDENTIFIED BY 'Qwerty123';
+          GRANT ALL PRIVILEGES ON user_inventory.* TO user_manager;
+          EOF
+      become: yes
+      
+    - name: Copiar DB DDL file
+      copy:
+        src: "./files/user_management.sql"
+        dest: "/home/ec2-user/user_management.sql"
+        mode: 0644
+    - name: Construir tabelas do banco de dados
+      shell: "mariadb user_inventory < /home/ec2-user/user_management.sql"
